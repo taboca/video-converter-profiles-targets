@@ -17,6 +17,21 @@ An ffmpeg-powered control room for slimming videos. Drop clips onto the stack, p
 - Node.js 18+ (for `crypto.randomUUID` and modern syntax)
 - `ffmpeg` and `ffprobe` available on your `$PATH`
 
+## FFmpeg Integration
+
+This app shells out to the system `ffprobe` and `ffmpeg` binaries, so both tools must be installed and resolvable via `$PATH`.
+
+- **Probing:** Every time you open `/api/videos` or `/api/output`, the server runs `ffprobe` with `-show_entries format=duration,size:stream=...` to capture resolution, duration, bitrate, codec, and size. That JSON payload feeds both side panels in the UI.
+- **Rendering:** Conversions call `ffmpeg` through `spawn()` with a command resembling:
+  ```
+  ffmpeg -y -i <input> -vf scale=<w>:<h>:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=<fps> \
+    -c:v libx264 -crf <crf> -preset medium \
+    -c:a aac -b:a 128k -movflags +faststart <project>/outputs/<name>.mp4
+  ```
+  (WebM renders swap in `libvpx-vp9` + `libopus` instead.) Each render lands inside the project’s `outputs/` directory and is immediately exposed back to the UI via `/media/input/<projectId>/outputs/<file>`.
+
+If the server logs `ffmpeg`/`ffprobe` errors, confirm the binaries are installed (e.g., `brew install ffmpeg`, `apt install ffmpeg`) and restart `npm run dev`.
+
 ## Getting Started
 
 1. Install dependencies: `npm install`
@@ -79,4 +94,3 @@ THIS SERVICE SHOULD NOT BE USED FOR MISSION CRITICAL APPLICATIONS, SUCH AS AIRCR
 Say thanks if this helped you 💛, the bitcoin address:
 
 bc1qd7y7d2875ujj5uzm2eufe5zjj42ps0ye6g9cq5
-

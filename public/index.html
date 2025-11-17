@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video Slimmer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="rail rail-left">
+        <div class="rail-header">
+          <h1>Stack</h1>
+          <p>db/input</p>
+        </div>
+        <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Upload videos">
+          <strong>Drag videos here</strong>
+          <span>or click to browse</span>
+          <input type="file" id="file-input" accept="video/*" multiple />
+        </div>
+        <div id="video-list" class="video-list"></div>
+      </aside>
+
+      <main class="stage">
+        <div class="stage-row">
+          <section class="panel current">
+            <header>
+              <div>
+                <p class="eyebrow">Current</p>
+                <h2 id="current-title">Pick a video</h2>
+              </div>
+              <button id="grid-toggle" class="ghost-btn" aria-pressed="false">Grid Overlay</button>
+            </header>
+            <div class="panel-body">
+              <video id="current-video" controls muted playsinline></video>
+              <ul id="current-details" class="meta"></ul>
+            </div>
+          </section>
+          <section class="panel candidate">
+            <header>
+              <div>
+                <p class="eyebrow">Candidate</p>
+                <h2>After tweaks</h2>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="candidate-preview" class="candidate-preview grid"></div>
+              <ul id="candidate-details" class="meta"></ul>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <aside class="rail rail-right">
+        <div class="rail-header">
+          <div>
+            <h1>Tools</h1>
+            <p>Render profiles</p>
+          </div>
+          <button id="render-btn" class="accent-btn" disabled>Render</button>
+        </div>
+
+        <div class="accordion">
+          <section class="accordion-panel open" data-panel="profile">
+            <header>
+              <h3>Profiles</h3>
+              <button class="toggle">▾</button>
+            </header>
+            <div class="content">
+              <label class="field">
+                <span>Preset</span>
+                <select id="profile-select">
+                  <option value="">Custom</option>
+                </select>
+              </label>
+              <p class="hint">Pick a quick profile or dial in a custom combo.</p>
+            </div>
+          </section>
+
+          <section class="accordion-panel open" data-panel="resolution">
+            <header>
+              <h3>Resolution</h3>
+              <button class="toggle">▾</button>
+            </header>
+            <div class="content split">
+              <label class="field">
+                <span>Width</span>
+                <input type="number" id="width-input" min="320" max="1920" step="10" value="720" />
+              </label>
+              <label class="field">
+                <span>Height</span>
+                <input type="number" id="height-input" min="480" max="1920" step="10" value="1280" />
+              </label>
+            </div>
+          </section>
+
+          <section class="accordion-panel open" data-panel="quality">
+            <header>
+              <h3>Quality & Format</h3>
+              <button class="toggle">▾</button>
+            </header>
+            <div class="content">
+              <label class="field">
+                <span>CRF</span>
+                <input type="range" id="crf-input" min="18" max="32" value="24" />
+                <output id="crf-value">24</output>
+              </label>
+              <label class="field">
+                <span>Format</span>
+                <select id="format-select">
+                  <option value="mp4">mp4</option>
+                  <option value="webm">webm</option>
+                  <option value="mov">mov</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Frames Per Second</span>
+                <select id="fps-select">
+                  <option value="2">2 fps (time-lapse)</option>
+                  <option value="6">6 fps</option>
+                  <option value="12">12 fps</option>
+                  <option value="24" selected>24 fps</option>
+                  <option value="30">30 fps</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="accordion-panel open" data-panel="insight">
+            <header>
+              <h3>Output Deck</h3>
+              <button class="toggle">▾</button>
+            </header>
+            <div class="content">
+              <div id="status-pill" class="status-pill idle">Idle</div>
+              <div id="last-output" class="last-output">
+                <p>No renders yet.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

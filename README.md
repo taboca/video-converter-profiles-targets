@@ -1,6 +1,8 @@
-# Video Converter Smaller
+# Web Protocol Course Episode 110 - Video - A Video Converter 
 
-An ffmpeg-powered control room for slimming vertical videos. Drop clips onto the stack, probe codecs and file sizes, dial in a render profile, and compare the before/after streams side-by-side. Every upload is isolated inside its own workspace directory (`dir-video-uuid`) so that the original clip and all of its outputs live together.
+* [Web Protocol Course season](http://mgalli.com/s/webprotocol)
+
+An ffmpeg-powered control room for slimming videos. Drop clips onto the stack, probe codecs and file sizes, dial in a render profile, and compare the before/after streams side-by-side. Every upload is isolated inside its own workspace directory (`dir-video-uuid`) so that the original clip and all of its outputs live together.
 
 ## Features
 

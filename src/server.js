@@ -1,13 +1,16 @@
-const express = require('express');
-const path = require('path');
-const {promises: fs} = require('fs');
-const {execFile, spawn} = require('child_process');
-const {promisify} = require('util');
-const crypto = require('crypto');
-const multer = require('multer');
+import {execFile, spawn} from 'node:child_process';
+import crypto from 'node:crypto';
+import {promises as fs} from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {promisify} from 'node:util';
+import express from 'express';
+import multer from 'multer';
 
 const execFileAsync = promisify(execFile);
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 const INPUT_DIR = path.join(ROOT, 'db', 'input');
 const PUBLIC_DIR = path.join(ROOT, 'public');

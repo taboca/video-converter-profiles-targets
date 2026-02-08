@@ -32,6 +32,14 @@ This app shells out to the system `ffprobe` and `ffmpeg` binaries, so both tools
 
 If the server logs `ffmpeg`/`ffprobe` errors, confirm the binaries are installed (e.g., `brew install ffmpeg`, `apt install ffmpeg`) and restart `npm run dev`.
 
+### Ubuntu install
+
+```bash
+sudo apt update
+sudo apt install -y ffmpeg
+ffmpeg -version
+```
+
 ## Getting Started
 
 1. Install dependencies: `npm install`

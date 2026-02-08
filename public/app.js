@@ -5,6 +5,7 @@ const els = {
   currentDetails: document.getElementById('current-details'),
   candidateDetails: document.getElementById('candidate-details'),
   candidatePreview: document.getElementById('candidate-preview'),
+  zoomSelect: document.getElementById('zoom-select'),
   profileSelect: document.getElementById('profile-select'),
   widthInput: document.getElementById('width-input'),
   heightInput: document.getElementById('height-input'),
@@ -25,6 +26,7 @@ const state = {
   profiles: [],
   selectedVideo: null,
   selectedOutput: null,
+  zoom: 1,
   busy: false,
   uploading: false,
   dropZoneResetTimer: null,
@@ -59,6 +61,11 @@ function bindEvents() {
   els.fpsSelect.addEventListener('change', () => handleSettingsChange(true));
   els.renderBtn.addEventListener('click', handleRender);
   els.gridToggle.addEventListener('click', toggleGrid);
+  if (els.zoomSelect) {
+    els.zoomSelect.addEventListener('change', handleZoomChange);
+    els.zoomSelect.value = String(state.zoom);
+    els.zoomSelect.disabled = true;
+  }
   if (els.lastOutput) {
     els.lastOutput.addEventListener('click', handleOutputChipClick);
   }
@@ -299,16 +306,36 @@ function updateCandidatePanel() {
 
 function updateCandidatePreview() {
   els.candidatePreview.innerHTML = '';
+  const hasOutput = Boolean(state.selectedOutput && state.selectedOutput.path);
+  if (!hasOutput) {
+    resetCandidateZoom();
+    if (els.zoomSelect) {
+      els.zoomSelect.disabled = true;
+    }
+    if (state.selectedVideo) {
+      els.candidatePreview.textContent = 'Render to preview';
+    } else {
+      els.candidatePreview.textContent = 'GRID';
+    }
+    return;
+  }
+
+  if (els.zoomSelect) {
+    els.zoomSelect.disabled = false;
+    els.zoomSelect.value = String(state.zoom);
+  }
+  applyCandidateZoom();
+
   if (state.selectedOutput && state.selectedOutput.path) {
+    const viewport = document.createElement('div');
+    viewport.className = 'zoom-viewport';
     const video = document.createElement('video');
+    video.className = 'candidate-video';
     video.controls = true;
     video.loop = true;
     video.src = state.selectedOutput.path;
-    els.candidatePreview.appendChild(video);
-  } else if (state.selectedVideo) {
-    els.candidatePreview.textContent = 'Render to preview';
-  } else {
-    els.candidatePreview.textContent = 'GRID';
+    viewport.appendChild(video);
+    els.candidatePreview.appendChild(viewport);
   }
 }
 
@@ -461,6 +488,25 @@ function toggleGrid() {
   const next = !pressed;
   els.gridToggle.setAttribute('aria-pressed', String(next));
   els.candidatePreview.classList.toggle('off', !next);
+}
+
+function handleZoomChange() {
+  if (!els.zoomSelect) return;
+  const nextZoom = Number(els.zoomSelect.value) || 1;
+  state.zoom = nextZoom > 0 ? nextZoom : 1;
+  applyCandidateZoom();
+}
+
+function applyCandidateZoom() {
+  els.candidatePreview.style.setProperty('--zoom', String(state.zoom));
+}
+
+function resetCandidateZoom() {
+  state.zoom = 1;
+  if (els.zoomSelect) {
+    els.zoomSelect.value = '1';
+  }
+  applyCandidateZoom();
 }
 
 function renderMetaList(items) {

@@ -174,6 +174,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .panel .eyebrow {
@@ -205,6 +206,7 @@ video {
 }
 
 .candidate-preview {
+  --zoom: 1;
   position: relative;
   border-radius: 12px;
   border: 1px dashed rgba(255, 255, 255, 0.1);
@@ -216,14 +218,46 @@ video {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.3em;
+  overflow: hidden;
 }
 
-.candidate-preview video {
+.candidate-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.candidate-controls label {
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.candidate-controls select {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.candidate-preview .zoom-viewport {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.candidate-preview video,
+.candidate-preview .candidate-video {
   width: 100%;
   height: 100%;
   object-fit: contain;
   border-radius: 10px;
   background: black;
+  transform: scale(var(--zoom));
+  transform-origin: center center;
+  transition: transform 160ms ease;
 }
 
 .candidate-preview.grid::before {

@@ -9,6 +9,7 @@ package-lock.json
 .DS_Store
 .env
 .env.*
+config.json
 
 # Runtime output
 db/input/

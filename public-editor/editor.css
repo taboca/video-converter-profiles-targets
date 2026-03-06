@@ -11,6 +11,12 @@
   --danger: #9f4b4b;
 }
 
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -25,7 +31,7 @@ body {
 .editor-shell {
   display: grid;
   grid-template-columns: 280px 1fr 320px;
-  min-height: 100vh;
+  height: 100vh;
   gap: 10px;
   padding: 10px;
 }
@@ -43,6 +49,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 .panel-right {
@@ -50,6 +57,8 @@ body {
   border: none;
   border-radius: 0;
   box-shadow: none;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .panel-left {
@@ -497,6 +506,10 @@ button:hover {
     );
 }
 
+.timeline-wrap.clip-view-mode {
+  overflow: hidden;
+}
+
 .timeline-wrap.is-panning {
   cursor: grabbing;
 }
@@ -506,6 +519,13 @@ button:hover {
   min-height: 300px;
   padding: 12px;
   min-width: 100%;
+}
+
+.timeline-content.timeline-content-clip-view {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .ruler-row,
@@ -587,6 +607,18 @@ button:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  height: 100%;
+  min-height: 0;
+}
+
+.clip-view-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
 }
 
 .clip-view-ruler-row,

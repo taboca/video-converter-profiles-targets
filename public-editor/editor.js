@@ -27,6 +27,7 @@
     timelinePan: null,
     clipViewPan: null,
     clipViewScrollLeft: 0,
+    clipViewScrollTop: 0,
     suppressClipSelectionClick: false,
   };
 
@@ -775,6 +776,8 @@
 
   function renderTimeline() {
     if (!state.project) {
+      elements.timelineWrap?.classList.remove('clip-view-mode');
+      elements.timelineContent?.classList.remove('timeline-content-clip-view');
       elements.timelineContent.innerHTML = '<p class="hint">Select or create a project to start editing.</p>';
       return;
     }
@@ -782,6 +785,8 @@
       renderClippingCanvas();
       return;
     }
+    elements.timelineWrap?.classList.remove('clip-view-mode');
+    elements.timelineContent?.classList.remove('timeline-content-clip-view');
     syncTimelineZoom();
     const pxPerMs = getPxPerMs();
     const timelineDurationMs = getTimelineDurationMs(state.project);
@@ -894,6 +899,8 @@
 
   function renderClippingCanvas() {
     const layer = getSelectedLayer();
+    elements.timelineWrap?.classList.add('clip-view-mode');
+    elements.timelineContent?.classList.add('timeline-content-clip-view');
     if (!layer?.clip) {
       elements.timelineContent.innerHTML = '<p class="hint">Select a layer with a source video to work in clipping mode.</p>';
       return;
@@ -924,9 +931,16 @@
             <div class="row-track ruler-track clip-view-ruler-track" style="width:${trackWidth}px">${rulerTicks.join('')}</div>
           </div>
         </div>
-        ${rows || '<p class="hint">Provision clips from the transcribed segments to start the clipping view.</p>'}
+        <div class="clip-view-body">
+          ${rows || '<p class="hint">Provision clips from the transcribed segments to start the clipping view.</p>'}
+        </div>
       </div>
     `;
+    const clipViewBody = getClipViewBody();
+    if (clipViewBody) {
+      clipViewBody.scrollTop = state.clipViewScrollTop;
+      clipViewBody.addEventListener('scroll', onClipViewBodyScroll);
+    }
     syncClipViewTrackScroll();
     bindClipViewEvents(layer);
   }
@@ -1105,25 +1119,27 @@
   }
 
   function beginClipViewPan(event) {
-    if (event.button !== 0 || !elements.timelineWrap) return;
+    const clipViewBody = getClipViewBody();
+    if (event.button !== 0 || !clipViewBody) return;
     event.preventDefault();
     state.clipViewPan = {
       startY: event.clientY,
-      startScrollTop: elements.timelineWrap.scrollTop,
+      startScrollTop: clipViewBody.scrollTop,
       moved: false,
     };
-    elements.timelineWrap.classList.add('is-panning');
+    elements.timelineWrap?.classList.add('is-panning');
     window.addEventListener('mousemove', onClipViewPanMove);
     window.addEventListener('mouseup', endClipViewPan);
   }
 
   function onClipViewPanMove(event) {
-    if (!state.clipViewPan || !elements.timelineWrap) return;
+    const clipViewBody = getClipViewBody();
+    if (!state.clipViewPan || !clipViewBody) return;
     const deltaY = event.clientY - state.clipViewPan.startY;
     if (Math.abs(deltaY) > 3) {
       state.clipViewPan.moved = true;
     }
-    elements.timelineWrap.scrollTop = state.clipViewPan.startScrollTop - deltaY;
+    clipViewBody.scrollTop = state.clipViewPan.startScrollTop - deltaY;
   }
 
   function endClipViewPan() {
@@ -1139,6 +1155,14 @@
   function setClipViewScrollLeft(nextValue) {
     state.clipViewScrollLeft = Math.max(0, Math.floor(nextValue || 0));
     syncClipViewTrackScroll();
+  }
+
+  function getClipViewBody() {
+    return elements.timelineContent?.querySelector('.clip-view-body') || null;
+  }
+
+  function onClipViewBodyScroll(event) {
+    state.clipViewScrollTop = event.currentTarget.scrollTop;
   }
 
   function syncClipViewTrackScroll() {

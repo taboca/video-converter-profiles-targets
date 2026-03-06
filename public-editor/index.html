@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video Editor</title>
+    <link rel="stylesheet" href="/editor.css" />
+  </head>
+  <body>
+    <div id="app" class="editor-shell">
+      <aside class="panel panel-left">
+        <div class="panel-title-row">
+          <h2>Projects</h2>
+        </div>
+        <form id="create-project-form" class="project-create">
+          <input id="create-project-name" type="text" placeholder="New project name" maxlength="80" />
+          <button type="submit">Add</button>
+        </form>
+        <div id="project-summary" class="project-summary"></div>
+        <div id="project-list" class="project-list"></div>
+      </aside>
+
+      <main class="panel panel-main">
+        <section id="timeline-view-panel" class="center-tab-panel center-tab-panel-timeline active">
+          <div class="toolbar">
+            <div class="toolbar-group">
+              <label for="zoom-range">Zoom</label>
+              <div class="zoom-control">
+                <button id="zoom-out-btn" type="button" aria-label="Zoom out">-</button>
+                <input id="zoom-range" type="range" min="0.01" max="2.5" step="0.01" />
+                <button id="zoom-in-btn" type="button" aria-label="Zoom in">+</button>
+              </div>
+              <span id="zoom-label">0.20x</span>
+            </div>
+            <div class="toolbar-group toolbar-actions">
+              <button id="add-layer-btn" type="button">Add Layer</button>
+              <button id="save-project-btn" type="button">Save</button>
+              <button id="render-btn" type="button" class="btn-accent">Render</button>
+              <span id="save-state-badge" class="badge save-state">saved</span>
+              <span id="render-badge" class="badge">idle</span>
+            </div>
+          </div>
+          <div id="timeline-wrap" class="timeline-wrap">
+            <div id="timeline-content" class="timeline-content"></div>
+          </div>
+        </section>
+
+        <section id="center-log-panel" class="center-tab-panel center-tab-panel-log">
+          <div class="stretch-panel-header">
+            <h3 class="stretch-panel-title">Render Logs</h3>
+            <p class="stretch-panel-subtitle">Render state output</p>
+          </div>
+          <section id="render-panel" class="render-panel">
+            <pre id="render-logs" class="logs"></pre>
+          </section>
+        </section>
+      </main>
+
+      <aside class="panel panel-right">
+        <div class="panel-title-row">
+          <h2>Editor Context</h2>
+        </div>
+
+        <nav class="context-tab-strip" aria-label="Editor side tabs" role="tablist">
+          <button id="tools-tab-btn" class="context-tab-button active" type="button" role="tab" aria-controls="tools-tab-panel" aria-selected="true">
+            Layer
+          </button>
+          <button id="logs-tab-btn" class="context-tab-button" type="button" role="tab" aria-controls="logs-tab-panel" aria-selected="false">
+            Logs
+          </button>
+        </nav>
+
+        <section id="tools-tab-panel" class="panel context-panel active context-tools-container" role="tabpanel" aria-labelledby="tools-tab-btn">
+          <div id="tools-tab-body" class="context-panel-body">
+            <section id="video-panel" class="context-panel context-panel-tools">
+              <div class="context-panel-header">
+                <div>
+                  <h3 id="video-panel-title" class="context-panel-title">Layer</h3>
+                  <p class="context-subtitle">Video source and trims</p>
+                </div>
+                <button
+                  id="video-panel-collapse-btn"
+                  class="collapse-btn"
+                  type="button"
+                  aria-expanded="true"
+                  aria-label="Toggle video panel"
+                >
+                  Collapse
+                </button>
+              </div>
+              <div id="video-source-content" class="context-panel-body inspector-content"></div>
+            </section>
+            <section id="transcriber-panel" class="context-panel context-panel-tools">
+              <div class="context-panel-header">
+                <div>
+                  <h3 id="transcriber-title" class="context-panel-title">Transcriber</h3>
+                  <p class="context-subtitle">Speech transcription service</p>
+                </div>
+                <button
+                  id="transcriber-panel-collapse-btn"
+                  class="collapse-btn"
+                  type="button"
+                  aria-expanded="true"
+                  aria-label="Toggle transcriber panel"
+                >
+                  Collapse
+                </button>
+              </div>
+              <div id="transcriber-content" class="context-panel-body inspector-content"></div>
+            </section>
+            <section id="clipping-panel" class="context-panel context-panel-tools collapsed">
+              <div class="context-panel-header">
+                <div>
+                  <h3 id="clipping-title" class="context-panel-title">Clipping</h3>
+                  <p class="context-subtitle">Segment-based clip editor</p>
+                </div>
+                <button
+                  id="clipping-panel-collapse-btn"
+                  class="collapse-btn"
+                  type="button"
+                  aria-expanded="false"
+                  aria-label="Toggle clipping panel"
+                >
+                  Expand
+                </button>
+              </div>
+              <div id="clipping-content" class="context-panel-body inspector-content"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="logs-tab-panel" class="panel context-panel context-panel-logs" role="tabpanel" aria-labelledby="logs-tab-btn">
+          <div class="context-panel-header">
+            <div>
+              <h3 class="context-panel-title">Logs</h3>
+              <p class="context-subtitle">Open Log center panel for output</p>
+            </div>
+          </div>
+          <section class="context-panel-body">
+            <p class="hint">Open the Log tab on the right to view render output here.</p>
+          </section>
+        </section>
+      </aside>
+    </div>
+
+    <script src="/editor.js"></script>
+  </body>
+</html>

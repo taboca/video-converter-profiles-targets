@@ -12,4 +12,5 @@ package-lock.json
 
 # Runtime output
 db/input/
+db/editor/
 tmp/

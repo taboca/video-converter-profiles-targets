@@ -43,18 +43,20 @@
     timelineWrap: document.getElementById('timeline-wrap'),
     timelineContent: document.getElementById('timeline-content'),
     timelinePanel: document.getElementById('timeline-view-panel'),
-    centerLogPanel: document.getElementById('center-log-panel'),
+    centerRenderPanel: document.getElementById('center-render-panel'),
     addLayerBtn: document.getElementById('add-layer-btn'),
-    renderBtn: document.getElementById('render-btn'),
     renderPanel: document.getElementById('render-panel'),
     saveProjectBtn: document.getElementById('save-project-btn'),
     saveStateBadge: document.getElementById('save-state-badge'),
     renderBadge: document.getElementById('render-badge'),
     renderLogs: document.getElementById('render-logs'),
+    renderQueueList: document.getElementById('render-queue-list'),
+    renderQueueCaption: document.getElementById('render-queue-caption'),
     toolsTabBtn: document.getElementById('tools-tab-btn'),
-    logsTabBtn: document.getElementById('logs-tab-btn'),
+    renderTabBtn: document.getElementById('render-tab-btn'),
     toolsTabPanel: document.getElementById('tools-tab-panel'),
-    logsTabPanel: document.getElementById('logs-tab-panel'),
+    renderTabPanel: document.getElementById('render-tab-panel'),
+    renderTabBody: document.getElementById('render-tab-body'),
     videoPanel: document.getElementById('video-panel'),
     transcriberPanel: document.getElementById('transcriber-panel'),
     clippingPanel: document.getElementById('clipping-panel'),
@@ -87,6 +89,12 @@
     },
     async fetchTranscription(projectId, layerId) {
       return api(`/api/editor/transcribe/${encodeURIComponent(projectId)}/${encodeURIComponent(layerId)}`);
+    },
+    async exportMarkdown(projectId, layerId, enabled = true) {
+      return api(`/api/editor/transcribe/${encodeURIComponent(projectId)}/${encodeURIComponent(layerId)}/markdown`, {
+        method: 'POST',
+        body: {enabled},
+      });
     },
     hasAudio(layer) {
       return Boolean(layer?.transcription?.audio?.path);
@@ -187,29 +195,12 @@
       }
     });
 
-    elements.renderBtn.addEventListener('click', async () => {
-      if (!state.project) return;
-      if (state.projectDirty || state.saveStatus === 'saving') {
-        elements.renderLogs.textContent = 'Project has unsaved changes. Save before rendering.';
-        return;
-      }
-      try {
-        const data = await api(`/api/editor/render/${encodeURIComponent(state.project.id)}`, {method: 'POST'});
-        state.project.lastRender = data.render;
-        renderRenderPanel();
-        startRenderPolling();
-      } catch (error) {
-        console.error(error);
-        elements.renderLogs.textContent = `Render start failed: ${error.message}`;
-      }
-    });
-
     elements.toolsTabBtn?.addEventListener('click', () => {
       state.activeContextTab = 'tools';
       renderAll();
     });
-    elements.logsTabBtn?.addEventListener('click', () => {
-      state.activeContextTab = 'logs';
+    elements.renderTabBtn?.addEventListener('click', () => {
+      state.activeContextTab = 'render';
       renderAll();
     });
     elements.videoPanelCollapseBtn?.addEventListener('click', () => {
@@ -233,6 +224,26 @@
       syncTimelineZoom();
       renderTimeline();
     });
+  }
+
+  async function startRender() {
+    if (!state.project) return;
+    state.activeContextTab = 'render';
+    if (state.projectDirty || state.saveStatus === 'saving') {
+      renderAll();
+      elements.renderLogs.textContent = 'Project has unsaved changes. Save before rendering.';
+      return;
+    }
+    try {
+      const data = await api(`/api/editor/render/${encodeURIComponent(state.project.id)}`, {method: 'POST'});
+      state.project.lastRender = normalizeRenderState(data.render);
+      renderAll();
+      startRenderPolling();
+    } catch (error) {
+      console.error(error);
+      renderAll();
+      elements.renderLogs.textContent = `Render start failed: ${error.message}`;
+    }
   }
 
   async function refreshProjects() {
@@ -365,6 +376,7 @@
       status: input.status || 'idle',
       audio: input.audio ? normalizeTranscriptionAsset(input.audio) : null,
       transcript: input.transcript ? normalizeTranscriptionAsset(input.transcript) : null,
+      markdown: input.markdown ? normalizeTranscriptionAsset(input.markdown) : null,
       responseFormat: typeof input.responseFormat === 'string' ? input.responseFormat : null,
       timestampGranularities: Array.isArray(input.timestampGranularities)
         ? input.timestampGranularities.filter((value) => typeof value === 'string')
@@ -482,6 +494,12 @@
   }
 
   function normalizeRenderState(render) {
+    const queueJobs = Array.isArray(render?.queueJobs)
+      ? render.queueJobs
+          .map((job, index) => normalizeRenderQueueJob(job, index))
+          .filter(Boolean)
+      : [];
+    const summary = normalizeRenderQueueSummary(render?.queueSummary, queueJobs);
     return {
       id: render?.id || null,
       status: render?.status || 'idle',
@@ -490,6 +508,62 @@
       error: render?.error || null,
       startedAt: render?.startedAt || null,
       endedAt: render?.endedAt || null,
+      queueSummary: summary,
+      queueJobs,
+    };
+  }
+
+  function normalizeRenderQueueJob(job, index) {
+    const startMs = Number(job?.startMs);
+    const endMs = Number(job?.endMs);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      return null;
+    }
+    const sourceClipIds = Array.isArray(job?.sourceClipIds)
+      ? job.sourceClipIds.filter((value) => typeof value === 'string' && value)
+      : [];
+    return {
+      id: job?.id || `job-${index + 1}`,
+      layerId: job?.layerId || 'layer',
+      status: job?.status || 'pending',
+      startMs: Math.max(0, Math.round(startMs)),
+      endMs: Math.max(0, Math.round(endMs)),
+      durationMs: Math.max(0, Math.round((Number(job?.durationMs) || endMs - startMs))),
+      sourceClipIds,
+      sourceSegmentCount: Math.max(
+        sourceClipIds.length,
+        Number.isFinite(Number(job?.sourceSegmentCount)) ? Math.max(1, Number(job.sourceSegmentCount)) : 1,
+      ),
+      textPreview: typeof job?.textPreview === 'string' ? job.textPreview : '',
+      stagedPath: typeof job?.stagedPath === 'string' ? job.stagedPath : null,
+      startedAt: job?.startedAt || null,
+      endedAt: job?.endedAt || null,
+      error: job?.error || null,
+    };
+  }
+
+  function normalizeRenderQueueSummary(summary, queueJobs = []) {
+    const jobs = Array.isArray(queueJobs) ? queueJobs : [];
+    return {
+      layerCount: Math.max(
+        Number.isFinite(Number(summary?.layerCount)) ? Math.max(0, Number(summary.layerCount)) : 0,
+        new Set(jobs.map((job) => job.layerId).filter(Boolean)).size,
+      ),
+      sourceSegmentCount: Math.max(
+        Number.isFinite(Number(summary?.sourceSegmentCount)) ? Math.max(0, Number(summary.sourceSegmentCount)) : 0,
+        jobs.reduce((sum, job) => sum + Math.max(1, Number(job.sourceSegmentCount) || 1), 0),
+      ),
+      consolidatedJobCount: Math.max(
+        Number.isFinite(Number(summary?.consolidatedJobCount)) ? Math.max(0, Number(summary.consolidatedJobCount)) : 0,
+        jobs.length,
+      ),
+      mutedSegmentCount: Number.isFinite(Number(summary?.mutedSegmentCount))
+        ? Math.max(0, Number(summary.mutedSegmentCount))
+        : 0,
+      completedJobCount: jobs.filter((job) => job.status === 'completed').length,
+      failedJobCount: jobs.filter((job) => job.status === 'failed').length,
+      runningJobCount: jobs.filter((job) => job.status === 'running').length,
+      pendingJobCount: jobs.filter((job) => job.status === 'pending').length,
     };
   }
 
@@ -504,12 +578,12 @@
   }
 
   function applyContextPanelVisibility() {
-    const activeTab = state.activeContextTab === 'logs' ? 'logs' : 'tools';
+    const activeTab = state.activeContextTab === 'render' ? 'render' : 'tools';
     if (elements.toolsTabPanel) {
       elements.toolsTabPanel.classList.toggle('active', activeTab === 'tools');
     }
-    if (elements.logsTabPanel) {
-      elements.logsTabPanel.classList.toggle('active', activeTab === 'logs');
+    if (elements.renderTabPanel) {
+      elements.renderTabPanel.classList.toggle('active', activeTab === 'render');
     }
     if (elements.videoPanel) {
       elements.videoPanel.classList.toggle('collapsed', !state.videoPanelExpanded);
@@ -524,15 +598,15 @@
       elements.toolsTabBtn.classList.toggle('active', activeTab === 'tools');
       elements.toolsTabBtn.setAttribute('aria-selected', activeTab === 'tools' ? 'true' : 'false');
     }
-    if (elements.logsTabBtn) {
-      elements.logsTabBtn.classList.toggle('active', activeTab === 'logs');
-      elements.logsTabBtn.setAttribute('aria-selected', activeTab === 'logs' ? 'true' : 'false');
+    if (elements.renderTabBtn) {
+      elements.renderTabBtn.classList.toggle('active', activeTab === 'render');
+      elements.renderTabBtn.setAttribute('aria-selected', activeTab === 'render' ? 'true' : 'false');
     }
     if (elements.timelinePanel) {
       elements.timelinePanel.classList.toggle('active', activeTab === 'tools');
     }
-    if (elements.centerLogPanel) {
-      elements.centerLogPanel.classList.toggle('active', activeTab === 'logs');
+    if (elements.centerRenderPanel) {
+      elements.centerRenderPanel.classList.toggle('active', activeTab === 'render');
     }
     if (elements.videoPanelCollapseBtn) {
       elements.videoPanelCollapseBtn.textContent = state.videoPanelExpanded ? 'Collapse' : 'Expand';
@@ -597,26 +671,26 @@
       <div class="summary-row"><span>Expected Final</span><strong>${formatClock(stats.expectedFinalDurationMs)}</strong></div>
       <div class="summary-row"><span>Layers</span><strong>${stats.layerCount}</strong></div>
       <div class="summary-row"><span>Rendered Layers</span><strong>${stats.renderedLayerCount}</strong></div>
-      <div class="summary-row"><span>Active Clips</span><strong>${stats.activeClipCount}</strong></div>
+      <div class="summary-row"><span>Segments</span><strong>${stats.activeClipCount}</strong></div>
+      <div class="summary-row"><span>Render Jobs</span><strong>${stats.consolidatedRenderJobCount}</strong></div>
       <div class="summary-row"><span>Muted Clips</span><strong>${stats.mutedClipCount}</strong></div>
       <div class="summary-row"><span>Canvas Span</span><strong>${formatClock(stats.timelineEndMs)}</strong></div>
-      ${
-        renderOutputPath
-          ? `
-            <div class="summary-render-output">
-              <div class="summary-render-title">Render Output</div>
-              <div class="summary-render-file">${escapeHtml(renderOutputName || renderOutputPath)}</div>
-              <a class="summary-render-link" href="${escapeAttribute(renderOutputPath)}" target="_blank" rel="noopener">Open Render</a>
-            </div>
-          `
-          : ''
-      }
+      <div class="summary-render-output">
+        <div class="summary-render-title">Render Context</div>
+        <div class="summary-render-file">${escapeHtml(renderOutputName || 'No render output yet')}</div>
+        <button id="project-render-context-btn" type="button" class="btn-accent">Render</button>
+      </div>
     `;
+    document.getElementById('project-render-context-btn')?.addEventListener('click', () => {
+      state.activeContextTab = 'render';
+      renderAll();
+    });
   }
 
   function computeProjectStats(project) {
-    const renderLayers = collectExpectedRenderLayers(project);
-    const activeClipCount = renderLayers.reduce((sum, layer) => sum + layer.clips.length, 0);
+    const renderPreview = buildRenderPreview(project);
+    const renderLayers = renderPreview.layers;
+    const activeClipCount = renderPreview.summary.sourceSegmentCount;
     const mutedClipCount = project.layers.reduce((sum, layer) => {
       const clips = Array.isArray(layer?.clipping?.clips) ? layer.clipping.clips : [];
       return sum + clips.filter((clip) => clip?.muted).length;
@@ -629,28 +703,48 @@
       layerCount: project.layers.length,
       renderedLayerCount: renderLayers.length,
       activeClipCount,
+      consolidatedRenderJobCount: renderPreview.summary.consolidatedJobCount,
       mutedClipCount,
       timelineEndMs: Math.max(0, Math.floor(timelineEndMs)),
     };
   }
 
-  function collectExpectedRenderLayers(project) {
+  function buildRenderPreview(project) {
     const order = Array.isArray(project?.timeline?.masterOrder) ? project.timeline.masterOrder : [];
     const orderRank = new Map(order.map((id, index) => [id, index]));
-    return (project?.layers || [])
+    const layers = (project?.layers || [])
       .filter((layer) => layer?.clip?.sourceVideoId)
       .map((layer) => {
-        const clips = collectExpectedRenderClips(layer);
+        const sourceSegments = collectExpectedRenderClips(layer);
+        const queueJobs = consolidateExpectedRenderJobs(layer.id, sourceSegments);
         return {
           layerId: layer.id,
           startMs: Number(layer?.clip?.startMs) || 0,
-          durationMs: clips.reduce((sum, clip) => sum + (clip.endMs - clip.startMs), 0),
+          durationMs: sourceSegments.reduce((sum, clip) => sum + (clip.endMs - clip.startMs), 0),
           orderRank: orderRank.has(layer.id) ? orderRank.get(layer.id) : Number.MAX_SAFE_INTEGER,
-          clips,
+          sourceSegments,
+          queueJobs,
         };
       })
-      .filter((layer) => layer.clips.length > 0)
+      .filter((layer) => layer.sourceSegments.length > 0)
       .sort((a, b) => a.orderRank - b.orderRank);
+    const queueJobs = layers.flatMap((layer) => layer.queueJobs);
+    return {
+      layers,
+      queueJobs,
+      summary: normalizeRenderQueueSummary(
+        {
+          layerCount: layers.length,
+          sourceSegmentCount: layers.reduce((sum, layer) => sum + layer.sourceSegments.length, 0),
+          consolidatedJobCount: queueJobs.length,
+          mutedSegmentCount: (project?.layers || []).reduce((sum, layer) => {
+            const clips = Array.isArray(layer?.clipping?.clips) ? layer.clipping.clips : [];
+            return sum + clips.filter((clip) => clip?.muted).length;
+          }, 0),
+        },
+        queueJobs,
+      ),
+    };
   }
 
   function collectExpectedRenderClips(layer) {
@@ -659,8 +753,10 @@
       return clippingClips
         .filter((clip) => !clip?.muted)
         .map((clip) => ({
+          clipId: clip.id || 'clip',
           startMs: Number(clip.startMs) || 0,
           endMs: Number(clip.endMs) || 0,
+          text: typeof clip.text === 'string' ? clip.text : '',
         }))
         .filter((clip) => clip.endMs > clip.startMs);
     }
@@ -670,7 +766,78 @@
     if (trimOutMs <= trimInMs) {
       return [];
     }
-    return [{startMs: trimInMs, endMs: trimOutMs}];
+    return [{clipId: 'clip-001', startMs: trimInMs, endMs: trimOutMs, text: ''}];
+  }
+
+  function consolidateExpectedRenderJobs(layerId, sourceSegments) {
+    const segments = Array.isArray(sourceSegments)
+      ? sourceSegments
+          .filter(Boolean)
+          .slice()
+          .sort((a, b) => {
+            if (a.startMs !== b.startMs) {
+              return a.startMs - b.startMs;
+            }
+            return a.endMs - b.endMs;
+          })
+      : [];
+    if (!segments.length) {
+      return [];
+    }
+    const jobs = [];
+    let current = null;
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index];
+      if (!current) {
+        current = createExpectedRenderJob(layerId, segment, index);
+        continue;
+      }
+      if (segment.startMs <= current.endMs) {
+        current.endMs = Math.max(current.endMs, segment.endMs);
+        current.sourceClipIds.push(segment.clipId || `clip-${index + 1}`);
+        if (segment.text) {
+          current.textSnippets.push(segment.text);
+        }
+        continue;
+      }
+      jobs.push(finalizeExpectedRenderJob(current));
+      current = createExpectedRenderJob(layerId, segment, index);
+    }
+    if (current) {
+      jobs.push(finalizeExpectedRenderJob(current));
+    }
+    return jobs;
+  }
+
+  function createExpectedRenderJob(layerId, segment, index) {
+    return {
+      id: `${layerId}-job-${index + 1}`,
+      layerId,
+      status: 'planned',
+      startMs: segment.startMs,
+      endMs: segment.endMs,
+      sourceClipIds: [segment.clipId || `clip-${index + 1}`],
+      textSnippets: segment.text ? [segment.text] : [],
+    };
+  }
+
+  function finalizeExpectedRenderJob(job) {
+    const preview = job.textSnippets.slice(0, 2).join(' / ');
+    return {
+      id: job.id,
+      layerId: job.layerId,
+      status: 'planned',
+      startMs: job.startMs,
+      endMs: job.endMs,
+      durationMs: Math.max(0, job.endMs - job.startMs),
+      sourceClipIds: job.sourceClipIds,
+      sourceSegmentCount: job.sourceClipIds.length,
+      textPreview: preview.length > 140 ? `${preview.slice(0, 137)}...` : preview,
+      stagedPath: null,
+      startedAt: null,
+      endedAt: null,
+      error: null,
+    };
   }
 
   function resolveExpectedVisibleLayers(renderLayers) {
@@ -743,8 +910,6 @@
     setRenderBadge(renderState.status);
     elements.saveProjectBtn.disabled =
       !state.project || !state.projectDirty || state.saveStatus === 'saving';
-    elements.renderBtn.disabled =
-      !state.project || renderState.status === 'running' || state.projectDirty || state.saveStatus === 'saving';
     elements.addLayerBtn.disabled = !state.project;
     if (elements.zoomOutBtn) {
       elements.zoomOutBtn.disabled = !state.project;
@@ -1237,12 +1402,99 @@
     if (state.activeContextTab === 'tools') {
       renderToolsPanel();
     } else {
-      renderLogsPanel();
+      renderRenderInspector();
     }
   }
 
-  function renderLogsPanel() {
-    return;
+  function getCurrentRenderDisplayData() {
+    const renderState = normalizeRenderState(state.project?.lastRender);
+    const preview = buildRenderPreview(state.project);
+    const hasTrackedQueue = renderState.queueJobs.length > 0;
+    const useTrackedQueue =
+      renderState.status === 'running' || (hasTrackedQueue && !state.projectDirty && state.saveStatus !== 'saving');
+    return {
+      renderState,
+      preview,
+      queueJobs: useTrackedQueue ? renderState.queueJobs : preview.queueJobs,
+      queueSummary: useTrackedQueue ? renderState.queueSummary : preview.summary,
+      queueMode:
+        renderState.status === 'running'
+          ? 'Tracked Live Queue'
+          : useTrackedQueue
+            ? 'Last Tracked Queue'
+            : 'Planned Queue',
+    };
+  }
+
+  function renderRenderInspector() {
+    if (!elements.renderTabBody) return;
+    if (!state.project) {
+      if (elements.renderTabBtn) {
+        elements.renderTabBtn.textContent = 'Render';
+      }
+      elements.renderTabBody.innerHTML = '<p class="hint">Select a project to inspect its render queue.</p>';
+      return;
+    }
+    const {renderState, queueSummary, queueMode} = getCurrentRenderDisplayData();
+    const outputPath = renderState.outputPath || '';
+    const outputName = outputPath ? decodeURIComponent(outputPath.split('/').pop() || outputPath) : '';
+    const canStartRender =
+      Boolean(state.project) &&
+      renderState.status !== 'running' &&
+      !state.projectDirty &&
+      state.saveStatus !== 'saving' &&
+      queueSummary.consolidatedJobCount > 0;
+    if (elements.renderTabBtn) {
+      const suffix = queueSummary.consolidatedJobCount ? ` (${queueSummary.consolidatedJobCount})` : '';
+      elements.renderTabBtn.textContent = `Render${suffix}`;
+    }
+    elements.renderTabBody.innerHTML = `
+      <div class="inspector-card">
+        <div class="meta-line">Status</div>
+        <div class="render-status-pill render-status-pill-${escapeAttribute(renderState.status || 'idle')}">${escapeHtml(
+          renderState.status || 'idle',
+        )}</div>
+        <div class="meta-line">Queue Source: ${escapeHtml(queueMode)}</div>
+        <div class="meta-line">Layers to Resolve: ${queueSummary.layerCount}</div>
+        <div class="meta-line">Segments: ${queueSummary.sourceSegmentCount}</div>
+        <div class="meta-line">Consolidated Jobs: ${queueSummary.consolidatedJobCount}</div>
+        <div class="meta-line">Muted Segments: ${queueSummary.mutedSegmentCount}</div>
+        <div class="toolbar-group toolbar-group-vertical">
+          <button id="start-render-btn" type="button" class="btn-accent" ${canStartRender ? '' : 'disabled'}>Start Render</button>
+        </div>
+        ${
+          !canStartRender && state.projectDirty
+            ? '<p class="hint">Save the project before starting a new render.</p>'
+            : !canStartRender && queueSummary.consolidatedJobCount === 0
+              ? '<p class="hint">There are no active render jobs in the current queue.</p>'
+              : ''
+        }
+      </div>
+      <div class="inspector-card">
+        <div class="meta-line">Queue Progress</div>
+        <div class="meta-line">Pending: ${queueSummary.pendingJobCount}</div>
+        <div class="meta-line">Running: ${queueSummary.runningJobCount}</div>
+        <div class="meta-line">Completed: ${queueSummary.completedJobCount}</div>
+        <div class="meta-line">Failed: ${queueSummary.failedJobCount}</div>
+        ${renderState.startedAt ? `<div class="meta-line">Started: ${escapeHtml(formatDate(renderState.startedAt))}</div>` : ''}
+        ${renderState.endedAt ? `<div class="meta-line">Ended: ${escapeHtml(formatDate(renderState.endedAt))}</div>` : ''}
+        ${renderState.error ? `<div class="meta-line">Error: ${escapeHtml(renderState.error)}</div>` : ''}
+      </div>
+      <div class="inspector-card">
+        <div class="meta-line">Last Output</div>
+        <div class="render-output-file">${escapeHtml(outputName || 'No output yet')}</div>
+        ${
+          outputPath
+            ? `<a class="summary-render-link" href="${escapeAttribute(outputPath)}" target="_blank" rel="noopener">Open Render</a>`
+            : '<p class="hint">Run the queue to produce an output file.</p>'
+        }
+      </div>
+    `;
+    document.getElementById('start-render-btn')?.addEventListener('click', () => {
+      startRender().catch((error) => {
+        console.error(error);
+      });
+    });
   }
 
   function renderToolsPanel() {
@@ -1402,6 +1654,7 @@
         ${transcriberStatusLine ? `<div class="meta-line transcription-progress">${escapeHtml(transcriberStatusLine)}</div>` : ''}
         ${transcription?.audio?.path ? `<div class="meta-line">Audio: ${formatBytes(transcription.audio.sizeBytes || 0)} (${escapeHtml(transcription.audio.path)})</div>` : ''}
         ${transcription?.transcript?.path ? `<div class="meta-line">Transcript: ${formatBytes(transcription.transcript.sizeBytes || 0)} (${escapeHtml(transcription.transcript.path)})</div>` : ''}
+        ${transcription?.markdown?.path ? `<div class="meta-line">Markdown: ${formatBytes(transcription.markdown.sizeBytes || 0)} (${escapeHtml(transcription.markdown.path)})</div>` : ''}
         ${textPreview ? `<div class="meta-line">${textPreview}</div>` : ''}
         <div class="toolbar-group toolbar-group-vertical">
           <button id="transcriber-extract-btn" type="button" ${clip && !transcriptionBusy ? '' : 'disabled'}>${
@@ -1413,6 +1666,15 @@
           <button id="transcriber-view-json-btn" type="button" ${
             transcription?.transcript?.path && !transcriptionBusy ? '' : 'disabled'
           } data-visible="${state.transcriptionViewerLayerId === layer.id}">View Transcript JSON</button>
+          <label class="transcription-visibility-toggle">
+            <input id="transcriber-export-markdown-toggle" type="checkbox" ${
+              transcription?.markdown?.path ? 'checked' : ''
+            } ${transcription?.transcript?.path && !transcriptionBusy ? '' : 'disabled'} />
+            <span>Export transcript markdown</span>
+          </label>
+          <button id="transcriber-view-markdown-btn" type="button" ${
+            transcription?.markdown?.path && !transcriptionBusy ? '' : 'disabled'
+          }>View Transcript Markdown</button>
         </div>
         <pre id="transcriber-json" class="transcriber-json ${state.transcriptionViewerLayerId === layer.id ? '' : 'hidden'}">${escapeHtml(
           formatTranscriberJson(
@@ -1929,6 +2191,8 @@
     const extractButton = document.getElementById('transcriber-extract-btn');
     const runButton = document.getElementById('transcriber-run-btn');
     const viewButton = document.getElementById('transcriber-view-json-btn');
+    const exportMarkdownToggle = document.getElementById('transcriber-export-markdown-toggle');
+    const viewMarkdownButton = document.getElementById('transcriber-view-markdown-btn');
     const timelineToggle = document.getElementById('transcriber-timeline-visible');
     const transcriptArea = document.getElementById('transcriber-json');
 
@@ -2057,6 +2321,55 @@
         );
       }
       syncTranscriberState(layer);
+    });
+
+    exportMarkdownToggle?.addEventListener('change', async () => {
+      if (!state.project || !layer.transcription?.transcript?.path) return;
+      if (!exportMarkdownToggle.checked) {
+        exportMarkdownToggle.disabled = true;
+        try {
+          const data = await transcribeCaptionerService.exportMarkdown(state.project.id, layer.id, false);
+          layer.transcription = normalizeTranscription(data.transcription || layer.transcription || null);
+          renderToolsPanel();
+        } catch (error) {
+          console.error(error);
+          exportMarkdownToggle.checked = true;
+          elements.renderLogs.textContent = `Transcript markdown export failed: ${error.message}`;
+        } finally {
+          exportMarkdownToggle.disabled = false;
+        }
+        return;
+      }
+      exportMarkdownToggle.disabled = true;
+      try {
+        const data = await transcribeCaptionerService.exportMarkdown(state.project.id, layer.id);
+        layer.transcription = normalizeTranscription(data.transcription || layer.transcription || null);
+        renderToolsPanel();
+      } catch (error) {
+        console.error(error);
+        exportMarkdownToggle.checked = false;
+        elements.renderLogs.textContent = `Transcript markdown export failed: ${error.message}`;
+      } finally {
+        exportMarkdownToggle.disabled = false;
+      }
+    });
+
+    viewMarkdownButton?.addEventListener('click', async () => {
+      if (!state.project) return;
+      if (!layer.transcription?.markdown?.path && layer.transcription?.transcript?.path) {
+        try {
+          const data = await transcribeCaptionerService.exportMarkdown(state.project.id, layer.id);
+          layer.transcription = normalizeTranscription(data.transcription || layer.transcription || null);
+          renderToolsPanel();
+        } catch (error) {
+          console.error(error);
+          elements.renderLogs.textContent = `Transcript markdown export failed: ${error.message}`;
+          return;
+        }
+      }
+      if (layer.transcription?.markdown?.path) {
+        window.open(layer.transcription.markdown.path, '_blank', 'noopener');
+      }
     });
 
     timelineToggle?.addEventListener('change', async () => {
@@ -2213,12 +2526,46 @@
   }
 
   function renderRenderPanel() {
-    const render = normalizeRenderState(state.project?.lastRender);
-    setRenderBadge(render.status);
-    elements.renderLogs.textContent = render.logs.length
-      ? render.logs.join('\n')
+    const {renderState, queueJobs, queueSummary, queueMode} = getCurrentRenderDisplayData();
+    setRenderBadge(renderState.status);
+    if (elements.renderTabBtn) {
+      const suffix = queueSummary.consolidatedJobCount ? ` (${queueSummary.consolidatedJobCount})` : '';
+      elements.renderTabBtn.textContent = `Render${suffix}`;
+    }
+    if (elements.renderQueueCaption) {
+      elements.renderQueueCaption.textContent =
+        `${queueMode}: ${queueSummary.consolidatedJobCount} job(s), ${queueSummary.sourceSegmentCount} source segment(s)`;
+    }
+    if (elements.renderQueueList) {
+      elements.renderQueueList.innerHTML = queueJobs.length
+        ? queueJobs
+            .map(
+              (job, index) => `
+                <article class="render-queue-item render-queue-item-${escapeAttribute(job.status || 'planned')}">
+                  <div class="render-queue-item-head">
+                    <strong>Job ${index + 1}</strong>
+                    <span class="render-queue-status render-queue-status-${escapeAttribute(job.status || 'planned')}">${escapeHtml(
+                      job.status || 'planned',
+                    )}</span>
+                  </div>
+                  <div class="render-queue-meta">Layer ${escapeHtml(job.layerId)} | ${formatClockPrecise(job.startMs)} - ${formatClockPrecise(job.endMs)}</div>
+                  <div class="render-queue-meta">${job.sourceSegmentCount} source segment(s) | ${formatClock(job.durationMs)}</div>
+                  ${job.textPreview ? `<div class="render-queue-text">${escapeHtml(job.textPreview)}</div>` : ''}
+                  ${job.error ? `<div class="render-queue-error">${escapeHtml(job.error)}</div>` : ''}
+                </article>
+              `,
+            )
+            .join('')
+        : '<p class="hint">No render jobs are planned for this project yet.</p>';
+    }
+    elements.renderLogs.textContent = renderState.logs.length
+      ? renderState.logs.join('\n')
       : 'Render logs will appear here.';
     elements.renderLogs.scrollTop = elements.renderLogs.scrollHeight;
+    renderProjectSummary();
+    if (state.activeContextTab === 'render') {
+      renderRenderInspector();
+    }
     renderToolbar();
   }
 

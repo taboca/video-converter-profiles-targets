@@ -136,7 +136,11 @@ app.post('/api/editor/render/:projectId', async (req, res) => {
     if (!project) {
       return res.status(404).json({error: 'Project not found'});
     }
-    const job = createRenderJob(projectId);
+    const renderPlan = createRenderPlan(project);
+    if (!renderPlan.queueJobs.length) {
+      return res.status(400).json({error: 'No active layer clips configured for rendering'});
+    }
+    const job = createRenderJob(projectId, renderPlan);
     renderJobs.set(projectId, job);
     runRenderJob(project, job).catch((error) => {
       console.error('Render crash', error);
@@ -205,6 +209,7 @@ app.post('/api/editor/transcribe/:projectId/:layerId/audio', async (req, res) =>
         createdAt: now,
       },
       transcript: null,
+      markdown: null,
       responseFormat: 'verbose_json',
       timestampGranularities: ['segment'],
       segmentCount: null,
@@ -285,6 +290,7 @@ app.post('/api/editor/transcribe/:projectId/:layerId/transcript', async (req, re
         sizeBytes: transcriptStats.size,
         createdAt: now,
       },
+      markdown: null,
       responseFormat,
       timestampGranularities,
       segmentCount: transcriptSummary.segmentCount,
@@ -303,6 +309,70 @@ app.post('/api/editor/transcribe/:projectId/:layerId/transcript', async (req, re
   } catch (error) {
     console.error(error);
     res.status(500).json({error: 'Failed to transcribe audio', details: error.message});
+  }
+});
+
+app.post('/api/editor/transcribe/:projectId/:layerId/markdown', async (req, res) => {
+  try {
+    const projectId = req.params.projectId;
+    const layerId = req.params.layerId;
+    const project = await loadProjectState(projectId);
+    if (!project) {
+      return res.status(404).json({error: 'Project not found'});
+    }
+    const layer = findLayerForProject(project, layerId);
+    if (!layer) {
+      return res.status(404).json({error: 'Layer not found'});
+    }
+    const enabled = req.body?.enabled !== false;
+    if (!enabled) {
+      const now = new Date().toISOString();
+      layer.transcription = {
+        ...layer.transcription,
+        markdown: null,
+        updatedAt: now,
+      };
+      project.updatedAt = now;
+      await saveProjectState(project);
+      await updateProjectMetaInIndex(project);
+      return res.json({
+        transcription: layer.transcription,
+        markdown: null,
+      });
+    }
+    if (!layer.transcription?.transcript?.path) {
+      return res.status(400).json({error: 'No transcript JSON available'});
+    }
+    const paths = transcriptionService.resolveTranscriptionPaths({
+      editorProjectsDir: EDITOR_PROJECTS_DIR,
+      projectId,
+      layerId: layer.id,
+    });
+    const transcript = await transcriptionService.readTranscript(paths.transcriptAbsolutePath);
+    if (!transcript) {
+      return res.status(404).json({error: 'Transcript JSON not found'});
+    }
+    const markdownResult = await transcriptionService.exportTranscriptMarkdown(paths.markdownAbsolutePath, transcript);
+    const now = new Date().toISOString();
+    layer.transcription = {
+      ...layer.transcription,
+      markdown: {
+        path: paths.markdownPublicPath,
+        sizeBytes: markdownResult.sizeBytes,
+        createdAt: now,
+      },
+      updatedAt: now,
+    };
+    project.updatedAt = now;
+    await saveProjectState(project);
+    await updateProjectMetaInIndex(project);
+    res.json({
+      transcription: layer.transcription,
+      markdown: layer.transcription.markdown,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({error: 'Failed to export transcript markdown', details: error.message});
   }
 });
 
@@ -416,6 +486,21 @@ function defaultRenderState() {
     startedAt: null,
     endedAt: null,
     error: null,
+    queueSummary: defaultRenderQueueSummary(),
+    queueJobs: [],
+  };
+}
+
+function defaultRenderQueueSummary() {
+  return {
+    layerCount: 0,
+    sourceSegmentCount: 0,
+    consolidatedJobCount: 0,
+    mutedSegmentCount: 0,
+    completedJobCount: 0,
+    failedJobCount: 0,
+    runningJobCount: 0,
+    pendingJobCount: 0,
   };
 }
 
@@ -448,7 +533,7 @@ function mergeProjectState(current, incoming) {
     timeline,
     selectedLayerId,
     layers,
-    lastRender: current.lastRender || defaultRenderState(),
+    lastRender: sanitizeRenderState(current.lastRender || defaultRenderState()),
     createdAt: current.createdAt || now,
     updatedAt: now,
   };
@@ -484,14 +569,74 @@ function normalizePersistedProjectState(raw, fallbackId = null) {
     timeline,
     selectedLayerId,
     layers,
-    lastRender: {
-      ...defaultRenderState(),
-      ...render,
-      logs: Array.isArray(render.logs) ? render.logs.slice(-200) : [],
-    },
+    lastRender: sanitizeRenderState(render),
     createdAt: raw?.createdAt || now,
     updatedAt: raw?.updatedAt || raw?.createdAt || now,
   };
+}
+
+function sanitizeRenderState(input) {
+  const render = input && typeof input === 'object' ? input : {};
+  const queueJobs = Array.isArray(render.queueJobs) ? render.queueJobs.map((job) => sanitizeRenderQueueJob(job)).filter(Boolean) : [];
+  return {
+    ...defaultRenderState(),
+    ...render,
+    logs: Array.isArray(render.logs) ? render.logs.slice(-200) : [],
+    queueSummary: summarizeRenderQueueJobs(queueJobs, render.queueSummary),
+    queueJobs,
+  };
+}
+
+function sanitizeRenderQueueJob(input) {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const startMs = toNonNegativeInt(input.startMs, 0);
+  const endMs = toNonNegativeInt(input.endMs, startMs);
+  if (endMs <= startMs) {
+    return null;
+  }
+  const allowedStatus = new Set(['pending', 'running', 'completed', 'failed']);
+  const sourceClipIds = Array.isArray(input.sourceClipIds)
+    ? input.sourceClipIds.map((value) => sanitizeLayerId(value, '')).filter(Boolean)
+    : [];
+  return {
+    id: sanitizeLayerId(input.id, ''),
+    layerId: sanitizeLayerId(input.layerId, ''),
+    status: allowedStatus.has(input.status) ? input.status : 'pending',
+    startMs,
+    endMs,
+    durationMs: Math.max(0, endMs - startMs),
+    sourceClipIds,
+    sourceSegmentCount: Math.max(sourceClipIds.length, toPositiveInt(input.sourceSegmentCount, sourceClipIds.length || 1)),
+    textPreview: typeof input.textPreview === 'string' ? input.textPreview : '',
+    stagedPath: typeof input.stagedPath === 'string' ? input.stagedPath : null,
+    startedAt: typeof input.startedAt === 'string' ? input.startedAt : null,
+    endedAt: typeof input.endedAt === 'string' ? input.endedAt : null,
+    error: typeof input.error === 'string' ? input.error : null,
+  };
+}
+
+function summarizeRenderQueueJobs(queueJobs, summaryOverride = null) {
+  const summary = {
+    ...defaultRenderQueueSummary(),
+    ...(summaryOverride && typeof summaryOverride === 'object' ? summaryOverride : {}),
+  };
+  summary.layerCount = Math.max(
+    toNonNegativeInt(summary.layerCount, 0),
+    new Set(queueJobs.map((job) => job.layerId).filter(Boolean)).size,
+  );
+  summary.sourceSegmentCount = Math.max(
+    toNonNegativeInt(summary.sourceSegmentCount, 0),
+    queueJobs.reduce((sum, job) => sum + Math.max(1, toPositiveInt(job.sourceSegmentCount, 1)), 0),
+  );
+  summary.consolidatedJobCount = Math.max(toNonNegativeInt(summary.consolidatedJobCount, 0), queueJobs.length);
+  summary.completedJobCount = queueJobs.filter((job) => job.status === 'completed').length;
+  summary.failedJobCount = queueJobs.filter((job) => job.status === 'failed').length;
+  summary.runningJobCount = queueJobs.filter((job) => job.status === 'running').length;
+  summary.pendingJobCount = queueJobs.filter((job) => job.status === 'pending').length;
+  summary.mutedSegmentCount = toNonNegativeInt(summary.mutedSegmentCount, 0);
+  return summary;
 }
 
 function sanitizeTimeline(incoming, current, layers) {
@@ -563,6 +708,7 @@ function sanitizeTranscriptionState(input) {
     status,
     audio: sanitizeTranscriptionAsset(input.audio),
     transcript: sanitizeTranscriptionAsset(input.transcript),
+    markdown: sanitizeTranscriptionAsset(input.markdown),
     responseFormat: typeof input.responseFormat === 'string' ? input.responseFormat : null,
     timestampGranularities: Array.isArray(input.timestampGranularities)
       ? input.timestampGranularities.filter((value) => typeof value === 'string')
@@ -953,8 +1099,18 @@ async function createThumbnails({projectId, layerId, sourceVideoId, sourcePath, 
   return urls;
 }
 
-function createRenderJob(projectId) {
+function createRenderJob(projectId, renderPlan) {
   const startedAt = new Date().toISOString();
+  const queueJobs = Array.isArray(renderPlan?.queueJobs)
+    ? renderPlan.queueJobs.map((queueJob) => ({
+        ...queueJob,
+        status: 'pending',
+        stagedPath: null,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      }))
+    : [];
   return {
     id: `render-${crypto.randomUUID()}`,
     projectId,
@@ -964,6 +1120,9 @@ function createRenderJob(projectId) {
     error: null,
     startedAt,
     endedAt: null,
+    layerPlans: Array.isArray(renderPlan?.layers) ? renderPlan.layers : [],
+    queueSummary: summarizeRenderQueueJobs(queueJobs, renderPlan?.queueSummary),
+    queueJobs,
   };
 }
 
@@ -976,6 +1135,8 @@ function toPublicRenderState(job) {
     error: job.error,
     startedAt: job.startedAt,
     endedAt: job.endedAt,
+    queueSummary: summarizeRenderQueueJobs(job.queueJobs || [], job.queueSummary),
+    queueJobs: Array.isArray(job.queueJobs) ? job.queueJobs : [],
   };
 }
 
@@ -1026,11 +1187,7 @@ async function updateProjectRenderState(projectId, renderState) {
   if (!project) {
     return;
   }
-  project.lastRender = {
-    ...defaultRenderState(),
-    ...renderState,
-    logs: Array.isArray(renderState.logs) ? renderState.logs.slice(-200) : [],
-  };
+  project.lastRender = sanitizeRenderState(renderState);
   project.updatedAt = new Date().toISOString();
   await saveProjectState(project);
   await updateProjectMetaInIndex(project);
@@ -1052,14 +1209,26 @@ async function reconcilePersistedRenderIfNeeded(project) {
   const now = new Date().toISOString();
   const logs = Array.isArray(persisted.logs) ? persisted.logs.slice(-200) : [];
   logs.push(`[${now}] Render interrupted or server restarted. No active ffmpeg process detected.`);
-  project.lastRender = {
-    ...defaultRenderState(),
+  const queueJobs = Array.isArray(persisted.queueJobs)
+    ? persisted.queueJobs.map((item) =>
+        item?.status === 'running'
+          ? {
+              ...item,
+              status: 'failed',
+              endedAt: item.endedAt || now,
+              error: item.error || 'Render interrupted',
+            }
+          : item,
+      )
+    : [];
+  project.lastRender = sanitizeRenderState({
     ...persisted,
     status: 'failed',
     error: persisted.error || 'Render interrupted',
     endedAt: persisted.endedAt || now,
     logs: logs.slice(-200),
-  };
+    queueJobs,
+  });
   project.updatedAt = now;
   await saveProjectState(project);
   await updateProjectMetaInIndex(project);
@@ -1091,115 +1260,275 @@ async function hasLiveFfmpegRenderProcess(projectId, renderId) {
   }
 }
 
-function collectRenderableLayers(project) {
+function createRenderPlan(project) {
   const order = Array.isArray(project.timeline?.masterOrder) ? project.timeline.masterOrder : [];
   const layerOrder = order.length ? order : project.layers.map((layer) => layer.id);
   const orderRank = new Map(layerOrder.map((id, index) => [id, index]));
   const layers = [];
+  const queueJobs = [];
+  let sourceSegmentCount = 0;
+  let mutedSegmentCount = 0;
+  let queueOrdinal = 0;
   for (const layer of project.layers) {
     if (!layer.clip || !layer.clip.sourceVideoId) continue;
     const sourcePath = resolveSourceVideoPath(layer.clip.sourceVideoId);
-    const clipJobs = collectLayerClipRenderJobs(layer);
-    if (!clipJobs.length) continue;
+    const sourceSegments = collectLayerSourceRenderSegments(layer);
+    mutedSegmentCount += sourceSegments.mutedSegmentCount;
+    sourceSegmentCount += sourceSegments.activeSegments.length;
+    const consolidatedJobs = consolidateLayerRenderJobs(layer.id, sourceSegments.activeSegments);
+    if (!consolidatedJobs.length) continue;
+    const layerQueueJobs = consolidatedJobs.map((queueJob) => {
+      queueOrdinal += 1;
+      return {
+        id: `job-${String(queueOrdinal).padStart(3, '0')}`,
+        layerId: layer.id,
+        status: 'pending',
+        startMs: queueJob.startMs,
+        endMs: queueJob.endMs,
+        durationMs: queueJob.endMs - queueJob.startMs,
+        sourceClipIds: queueJob.sourceClipIds,
+        sourceSegmentCount: queueJob.sourceClipIds.length,
+        textPreview: queueJob.textPreview,
+        stagedPath: null,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      };
+    });
     layers.push({
       layerId: layer.id,
       sourcePath,
-      clipJobs,
       startMs: toInt(layer.clip.startMs),
       orderRank: orderRank.has(layer.id) ? orderRank.get(layer.id) : Number.MAX_SAFE_INTEGER,
+      queueJobIds: layerQueueJobs.map((queueJob) => queueJob.id),
     });
+    queueJobs.push(...layerQueueJobs);
   }
-  return layers.sort((a, b) => {
+  const sortedLayers = layers.sort((a, b) => {
     if (a.orderRank !== b.orderRank) {
       return a.orderRank - b.orderRank;
     }
     return 0;
   });
+  return {
+    layers: sortedLayers,
+    queueJobs,
+    queueSummary: summarizeRenderQueueJobs(queueJobs, {
+      layerCount: sortedLayers.length,
+      sourceSegmentCount,
+      consolidatedJobCount: queueJobs.length,
+      mutedSegmentCount,
+    }),
+  };
 }
 
-function collectLayerClipRenderJobs(layer) {
+function collectLayerSourceRenderSegments(layer) {
   const sourceDurationMs = toPositiveInt(layer?.clip?.sourceDurationMs);
   if (sourceDurationMs <= 0) {
-    return [];
+    return {activeSegments: [], mutedSegmentCount: 0};
   }
   const clipping = layer?.clipping;
   if (clipping && Array.isArray(clipping.clips) && clipping.clips.length) {
-    return clipping.clips
-      .filter((clip) => !clip?.muted)
-      .map((clip, index) => {
-        const startMs = clamp(toNonNegativeInt(clip.startMs, 0), 0, sourceDurationMs);
-        const endMs = clamp(toNonNegativeInt(clip.endMs, startMs), startMs, sourceDurationMs);
-        if (endMs <= startMs) {
-          return null;
-        }
-        return {
-          clipId: clip.id || `clip-${index + 1}`,
-          startMs,
-          endMs,
-          text: typeof clip.text === 'string' ? clip.text : '',
-        };
-      })
-      .filter(Boolean);
+    const activeSegments = [];
+    let mutedSegmentCount = 0;
+    for (let index = 0; index < clipping.clips.length; index += 1) {
+      const clip = clipping.clips[index];
+      const startMs = clamp(toNonNegativeInt(clip?.startMs, 0), 0, sourceDurationMs);
+      const endMs = clamp(toNonNegativeInt(clip?.endMs, startMs), startMs, sourceDurationMs);
+      if (endMs <= startMs) {
+        continue;
+      }
+      if (clip?.muted) {
+        mutedSegmentCount += 1;
+        continue;
+      }
+      activeSegments.push({
+        clipId: clip?.id || `clip-${index + 1}`,
+        startMs,
+        endMs,
+        text: typeof clip?.text === 'string' ? clip.text : '',
+      });
+    }
+    return {activeSegments, mutedSegmentCount};
   }
-  let trimInMs = clamp(toNonNegativeInt(layer?.clip?.trimInMs, 0), 0, sourceDurationMs);
-  let trimOutMs = clamp(toNonNegativeInt(layer?.clip?.trimOutMs, sourceDurationMs), trimInMs, sourceDurationMs);
+  const trimInMs = clamp(toNonNegativeInt(layer?.clip?.trimInMs, 0), 0, sourceDurationMs);
+  const trimOutMs = clamp(toNonNegativeInt(layer?.clip?.trimOutMs, sourceDurationMs), trimInMs, sourceDurationMs);
   if (trimOutMs <= trimInMs) {
+    return {activeSegments: [], mutedSegmentCount: 0};
+  }
+  return {
+    activeSegments: [
+      {
+        clipId: 'clip-001',
+        startMs: trimInMs,
+        endMs: trimOutMs,
+        text: '',
+      },
+    ],
+    mutedSegmentCount: 0,
+  };
+}
+
+function consolidateLayerRenderJobs(layerId, activeSegments) {
+  const segments = Array.isArray(activeSegments)
+    ? activeSegments
+        .filter(Boolean)
+        .slice()
+        .sort((a, b) => {
+          if (a.startMs !== b.startMs) {
+            return a.startMs - b.startMs;
+          }
+          return a.endMs - b.endMs;
+        })
+    : [];
+  if (!segments.length) {
     return [];
   }
-  return [
-    {
-      clipId: 'clip-001',
-      startMs: trimInMs,
-      endMs: trimOutMs,
-      text: '',
-    },
-  ];
+  const layers = [];
+  let current = null;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (!current) {
+      current = {
+        id: `${sanitizeLayerId(layerId)}-segment-${String(index + 1).padStart(3, '0')}`,
+        startMs: segment.startMs,
+        endMs: segment.endMs,
+        sourceClipIds: [segment.clipId],
+        textSnippets: segment.text ? [segment.text] : [],
+      };
+      continue;
+    }
+    if (segment.startMs <= current.endMs) {
+      current.endMs = Math.max(current.endMs, segment.endMs);
+      current.sourceClipIds.push(segment.clipId);
+      if (segment.text) {
+        current.textSnippets.push(segment.text);
+      }
+      continue;
+    }
+    layers.push(finalizeConsolidatedLayerRenderJob(current));
+    current = {
+      id: `${sanitizeLayerId(layerId)}-segment-${String(index + 1).padStart(3, '0')}`,
+      startMs: segment.startMs,
+      endMs: segment.endMs,
+      sourceClipIds: [segment.clipId],
+      textSnippets: segment.text ? [segment.text] : [],
+    };
+  }
+  if (current) {
+    layers.push(finalizeConsolidatedLayerRenderJob(current));
+  }
+  return layers;
+}
+
+function finalizeConsolidatedLayerRenderJob(item) {
+  const snippets = Array.isArray(item.textSnippets)
+    ? item.textSnippets.map((text) => String(text || '').trim()).filter(Boolean)
+    : [];
+  const textPreview = snippets.slice(0, 2).join(' / ');
+  return {
+    id: item.id,
+    startMs: item.startMs,
+    endMs: item.endMs,
+    sourceClipIds: item.sourceClipIds,
+    textPreview: textPreview.length > 140 ? `${textPreview.slice(0, 137)}...` : textPreview,
+  };
+}
+
+function updateRenderQueueJob(job, queueJobId, patch) {
+  if (!Array.isArray(job?.queueJobs)) {
+    return null;
+  }
+  const queueJob = job.queueJobs.find((item) => item.id === queueJobId);
+  if (!queueJob) {
+    return null;
+  }
+  Object.assign(queueJob, patch);
+  job.queueSummary = summarizeRenderQueueJobs(job.queueJobs, job.queueSummary);
+  return queueJob;
 }
 
 async function renderProjectLayers(project, job, renderRoot) {
-  const layerPlans = collectRenderableLayers(project);
+  const layerPlans = Array.isArray(job.layerPlans) && job.layerPlans.length ? job.layerPlans : createRenderPlan(project).layers;
+  const queueJobsById = new Map((job.queueJobs || []).map((queueJob) => [queueJob.id, queueJob]));
   const resolvedLayers = [];
   for (let layerIndex = 0; layerIndex < layerPlans.length; layerIndex += 1) {
     const layerPlan = layerPlans[layerIndex];
     const layerDir = path.join(renderRoot, 'layers', sanitizeLayerId(layerPlan.layerId, `layer-${layerIndex + 1}`));
     const stageDir = path.join(layerDir, 'stage');
     await fs.mkdir(stageDir, {recursive: true});
-    logRender(job, `Layer ${layerPlan.layerId}: rendering ${layerPlan.clipJobs.length} active clip(s)`);
+    const layerQueueJobs = (layerPlan.queueJobIds || [])
+      .map((queueJobId) => queueJobsById.get(queueJobId))
+      .filter(Boolean);
+    const layerSourceSegmentCount = layerQueueJobs.reduce(
+      (sum, queueJob) => sum + Math.max(1, toPositiveInt(queueJob.sourceSegmentCount, 1)),
+      0,
+    );
+    logRender(
+      job,
+      `Layer ${layerPlan.layerId}: rendering ${layerQueueJobs.length} consolidated job(s) from ${layerSourceSegmentCount} source segment(s)`,
+    );
     const stagedPaths = [];
-    for (let clipIndex = 0; clipIndex < layerPlan.clipJobs.length; clipIndex += 1) {
-      const clipJob = layerPlan.clipJobs[clipIndex];
-      const stagedPath = path.join(stageDir, `clip-${String(clipIndex + 1).padStart(3, '0')}.mp4`);
+    for (let clipIndex = 0; clipIndex < layerQueueJobs.length; clipIndex += 1) {
+      const clipJob = layerQueueJobs[clipIndex];
+      const stagedPath = path.join(stageDir, `${sanitizeLayerId(clipJob.id, `job-${clipIndex + 1}`)}.mp4`);
+      updateRenderQueueJob(job, clipJob.id, {
+        status: 'running',
+        stagedPath,
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        error: null,
+      });
+      await updateProjectRenderState(job.projectId, toPublicRenderState(job));
       logRender(
         job,
-        `Layer ${layerPlan.layerId} clip ${clipIndex + 1}: trim ${clipJob.startMs}-${clipJob.endMs}ms${clipJob.text ? ` text="${clipJob.text.slice(0, 60)}"` : ''}`,
+        `Layer ${layerPlan.layerId} job ${clipIndex + 1}: trim ${clipJob.startMs}-${clipJob.endMs}ms from ${clipJob.sourceSegmentCount} segment(s)${clipJob.textPreview ? ` text="${clipJob.textPreview.slice(0, 60)}"` : ''}`,
       );
-      await runFfmpegLogged(
-        [
-          '-y',
-          '-ss',
-          msToSec(clipJob.startMs),
-          '-to',
-          msToSec(clipJob.endMs),
-          '-i',
-          layerPlan.sourcePath,
-          '-vf',
-          'scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,fps=30',
-          '-c:v',
-          'libx264',
-          '-preset',
-          'veryfast',
-          '-crf',
-          '23',
-          '-c:a',
-          'aac',
-          '-b:a',
-          '128k',
-          '-movflags',
-          '+faststart',
+      try {
+        await runFfmpegLogged(
+          [
+            '-y',
+            '-ss',
+            msToSec(clipJob.startMs),
+            '-to',
+            msToSec(clipJob.endMs),
+            '-i',
+            layerPlan.sourcePath,
+            '-vf',
+            'scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,fps=30',
+            '-c:v',
+            'libx264',
+            '-preset',
+            'veryfast',
+            '-crf',
+            '23',
+            '-c:a',
+            'aac',
+            '-b:a',
+            '128k',
+            '-movflags',
+            '+faststart',
+            stagedPath,
+          ],
+          job,
+        );
+        updateRenderQueueJob(job, clipJob.id, {
+          status: 'completed',
           stagedPath,
-        ],
-        job,
-      );
+          endedAt: new Date().toISOString(),
+          error: null,
+        });
+      } catch (error) {
+        updateRenderQueueJob(job, clipJob.id, {
+          status: 'failed',
+          stagedPath,
+          endedAt: new Date().toISOString(),
+          error: error.message,
+        });
+        await updateProjectRenderState(job.projectId, toPublicRenderState(job));
+        throw error;
+      }
+      await updateProjectRenderState(job.projectId, toPublicRenderState(job));
       stagedPaths.push(stagedPath);
     }
     const resolvedPath = path.join(layerDir, `${sanitizeLayerId(layerPlan.layerId)}-resolved.mp4`);
@@ -1208,7 +1537,7 @@ async function renderProjectLayers(project, job, renderRoot) {
     resolvedLayers.push({
       layerId: layerPlan.layerId,
       resolvedPath,
-      durationMs: layerPlan.clipJobs.reduce((sum, clip) => sum + (clip.endMs - clip.startMs), 0),
+      durationMs: layerQueueJobs.reduce((sum, clip) => sum + (clip.endMs - clip.startMs), 0),
       startMs: layerPlan.startMs,
       orderRank: layerPlan.orderRank,
     });

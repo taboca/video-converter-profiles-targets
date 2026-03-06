@@ -10,6 +10,7 @@ export const transcriptionService = {
   transcribeAudioWithOpenAI,
   saveTranscript,
   readTranscript,
+  exportTranscriptMarkdown,
 };
 
 function resolveTranscriptionPaths({editorProjectsDir, projectId, layerId}) {
@@ -18,12 +19,15 @@ function resolveTranscriptionPaths({editorProjectsDir, projectId, layerId}) {
   const transcriptDir = path.join(editorProjectsDir, safeProjectId, 'transcripts');
   const audioFileName = `${safeLayerId}.mp3`;
   const transcriptFileName = `${safeLayerId}.transcript.json`;
+  const markdownFileName = `${safeLayerId}.transcript.md`;
   return {
     transcriptionDir: transcriptDir,
     audioAbsolutePath: path.join(transcriptDir, audioFileName),
     transcriptAbsolutePath: path.join(transcriptDir, transcriptFileName),
+    markdownAbsolutePath: path.join(transcriptDir, markdownFileName),
     audioPublicPath: `/media/editor/projects/${encodeURIComponent(safeProjectId)}/transcripts/${encodeURIComponent(audioFileName)}`,
     transcriptPublicPath: `/media/editor/projects/${encodeURIComponent(safeProjectId)}/transcripts/${encodeURIComponent(transcriptFileName)}`,
+    markdownPublicPath: `/media/editor/projects/${encodeURIComponent(safeProjectId)}/transcripts/${encodeURIComponent(markdownFileName)}`,
   };
 }
 
@@ -115,6 +119,61 @@ async function readTranscript(filePath) {
   } catch (_error) {
     return null;
   }
+}
+
+async function exportTranscriptMarkdown(filePath, transcriptPayload) {
+  const markdown = buildTranscriptMarkdown(transcriptPayload);
+  await fs.mkdir(path.dirname(filePath), {recursive: true});
+  await fs.writeFile(filePath, markdown, 'utf8');
+  const stats = await fs.stat(filePath);
+  return {
+    markdown,
+    sizeBytes: stats.size,
+  };
+}
+
+function buildTranscriptMarkdown(payload) {
+  const segments = Array.isArray(payload?.segments)
+    ? payload.segments
+        .map((segment) => normalizeTranscriptSegment(segment))
+        .filter(Boolean)
+    : [];
+  if (!segments.length) {
+    const fallbackText = typeof payload?.text === 'string' ? payload.text.trim() : '';
+    if (!fallbackText) {
+      throw new Error('Transcript JSON has no segment data to export');
+    }
+    return `# Transcript\n\n${fallbackText}\n`;
+  }
+  const lines = ['# Transcript', ''];
+  for (const segment of segments) {
+    lines.push(`## ${formatSegmentSeconds(segment.startSec)} - ${formatSegmentSeconds(segment.endSec)}`);
+    lines.push('');
+    lines.push(segment.text);
+    lines.push('');
+  }
+  return `${lines.join('\n').trim()}\n`;
+}
+
+function normalizeTranscriptSegment(segment) {
+  if (!segment || typeof segment !== 'object') {
+    return null;
+  }
+  const startSec = Number(segment.start);
+  const endSec = Number(segment.end);
+  const text = typeof segment.text === 'string' ? segment.text.trim() : '';
+  if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec || !text) {
+    return null;
+  }
+  return {
+    startSec,
+    endSec,
+    text,
+  };
+}
+
+function formatSegmentSeconds(value) {
+  return `${Number(value || 0).toFixed(3)}s`;
 }
 
 function sanitizeSlug(value) {

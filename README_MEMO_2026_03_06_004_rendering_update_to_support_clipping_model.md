@@ -96,6 +96,31 @@ The queue should:
 - process trimming operations
 - stage the resulting media fragments
 - preserve deterministic ordering
+- expose per-job status so the editor can show pending, running, completed, and failed work
+
+## Queue Consolidation
+
+The queue should not blindly create one render job for every active clip object.
+
+If two active clips are contiguous and there is no muted clip gap between them, they should be consolidated into one render job before FFmpeg execution.
+
+Example:
+
+```text
+Clip 1  start=0   end=10  muted=false
+Clip 2  start=10  end=18  muted=false
+Clip 3  start=18  end=22  muted=true
+Clip 4  start=22  end=30  muted=false
+```
+
+Queue produced:
+
+```text
+job_001  trim 0-18   sourceSegments=2
+job_002  trim 22-30  sourceSegments=1
+```
+
+This reduces unnecessary FFmpeg work while preserving the effective editorial result.
 
 ## Staging Output
 
@@ -150,10 +175,27 @@ The renderer must be updated so that it:
 
 - reads the clip collection associated with each layer
 - skips muted clips
-- generates trimming jobs per active clip
+- consolidates adjacent active clips into fewer render jobs when no muted gap exists between them
 - executes those jobs through a render queue
 - stages clip outputs
 - concatenates staged clips to produce the resolved media for the layer
+
+## Render UI Integration
+
+Rendering is still a project-level action, but it is no longer initiated from the top toolbar.
+
+The project summary area should open a dedicated Render context.
+
+That Render context must provide:
+
+- a queue view in the stretch canvas area
+- the render logs beside that queue view
+- a render inspector in the right sidebar
+- queue totals such as source segments and consolidated jobs
+- the last output file reference and an `Open Render` link in the render inspector
+
+The button in the project summary opens this Render context.
+The actual render execution control lives inside the render inspector itself.
 
 The existing renderer already supports layers, but it must be extended to interpret the clip model.
 
@@ -170,18 +212,15 @@ After this update:
 ## Changes
 
 - Updated the render pipeline in `src/editor/index.js` so rendering is now clip-aware on a per-layer basis.
-
 - The renderer now reads `layer.clipping.clips` when present and treats those clips as the authoritative render plan for that layer.
-
 - Muted clips are skipped and do not produce trim jobs.
-
-- Each active clip now generates a staged FFmpeg trim output under the render root before concatenation.
-
+- Active clips are consolidated into fewer render jobs when their ranges touch and no muted break exists between them.
+- The persisted render state now tracks queue summary data and per-job execution state.
+- Each consolidated render job now generates a staged FFmpeg trim output under the render root before concatenation.
 - Each layer now produces its own resolved media output by concatenating its staged clip fragments.
-
 - The final project render now uses those resolved layer outputs as the input to the last stage of the render pipeline.
 - The clipping-aware render path no longer applies the old project-level final crop logic.
 - When multiple resolved layers overlap, the final stage now prefers the visually higher layer and cuts the lower layer sequence at the overlap boundary.
 - The project inspector now reflects expected clip-aware output metrics instead of the old final crop controls.
-
+- The editor UI now opens rendering through a dedicated Render context with queue, logs, inspector controls, and moved output link placement.
 - Existing non-clipping projects remain supported through a legacy fallback that renders the layer trim range as a single clip when no clip collection exists yet.

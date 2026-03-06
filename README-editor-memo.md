@@ -16,10 +16,10 @@ Build a lightweight editor with:
 - Trim/crop-in and trim/crop-out handles per clip (non-destructive).
 - Timeline zoom control.
 - Frame-strip preview thumbnails (sampled via ffmpeg).
-- Render button that executes a recipe:
+- Render context that executes a recipe:
 - trim each layer clip to its selected in/out.
 - then concatenate in master timeline order.
-- Render logs + inline output preview when done.
+- Render queue + render logs in the stretch canvas, with output link in the right sidebar when done.
 
 This is not a replacement of the current converter UI. It is a separate server entrypoint and separate frontend.
 
@@ -139,7 +139,6 @@ Example:
 
 - Top toolbar:
 - timeline zoom control.
-- render button.
 - render status indicator.
 - Master timeline row at top.
 - Layer rows below (one row per layer).
@@ -159,6 +158,13 @@ When a layer is selected:
 - selected source media metadata (duration, resolution, size, codec if available).
 - numeric controls (optional) for start/trim values.
 - quick actions (clear clip, reset trims).
+
+When the project render context is selected:
+
+- render start button
+- queue totals (segments, consolidated jobs, muted segments)
+- per-render progress state
+- last output file name and open-render link
 
 ## 6) Timeline Behavior Rules
 
@@ -306,4 +312,3 @@ Suggested directories:
 - by row order, by explicit list, or by clip start time.
 - Default render format and profile.
 - Whether audio tracks are preserved, mixed, or dropped in V1.
-
